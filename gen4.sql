@@ -1,6 +1,6 @@
 USE [FairSetup20160410]
 GO
-/****** Object:  StoredProcedure [dbo].[F_GenerateUserCache_Data]    Script Date: 4/11/2016 12:41:59 AM ******/
+/****** Object:  StoredProcedure [dbo].[F_GenerateUserCache_Data]    Script Date: 4/11/2016 1:31:24 PM ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -20,6 +20,14 @@ BEGIN
 
 	--exec dbo.D_GenerateUserCache_Segments @user_id, @company_id, '1/1/1900'
 	--select * from cache_segments where UserID = @user_id and CompanyID = @company_id
+
+	DECLARE @t_disp TABLE
+	(
+		[Date] date,
+		v float,
+		P_Net float,
+		direction float
+	)
 
 	DECLARE @temp_t_work TABLE
 	(
@@ -41,7 +49,8 @@ BEGIN
 		Late_Multiplier float,
 		T_to_saturation int,
 		[internal_step] float,
-		[t] int
+		[t] int,
+		[PerformanceNet] float
 	)
 
 	-- let's get first and last dates
@@ -78,9 +87,16 @@ BEGIN
 	
 	-- Update impact potential
 		DECLARE @i_p float = 0
+		DECLARE @P_net float = 1  -- performance coefficient
+		DECLARE @direction float
 		-- CURSOR BASED LOOP
 		DECLARE @d date, @L float, @P float, @T float, @core_m float, @late_m float, @T_s int
-		DECLARE @direction int, @goal_L float, @step_s float
+		
+		-- Variables to calculate potential and net performance
+		DECLARE  @goal_ip	float -- impact potential goal value (Where are we trying to get to?)
+				,@step_ip	float -- how fast to we move given performance (How fast will we get there?)
+				,@goal_P	float -- goal for performance without level (Generally this is 1 - At Expectation)
+				,@step_P	float -- how fast to we move given performance
 
 		DECLARE @last_positive_L float = 0
 
@@ -93,23 +109,43 @@ BEGIN
 		BEGIN
 			-- calculate impact potential
 			if @P = 0 SET @P = NULL
-			SET @goal_L = (@L * ISNULL( @core_m, 1) * ISNULL( @late_m, 1) ) * ISNULL( @P, 1 )
-			SET @step_s = @goal_L / @T_s
+			SET @direction = ABS( ISNULL(@p, 1 )-1 )
+			
+			IF @direction = 0 SET @direction = 1
+			ELSE SET @direction = @direction / ( ISNULL(@p, 1 )-1 )
+
+			-- Calculate the step adjuster.  If we are going up, the speed is fast.  If we are going down, the speed is flipped
+			DECLARE @S float = ISNULL( @P, 1. )
+			IF @S > 1 SET @S = @S
+			ELSE IF @S < 1 SET @S = 1-@S
+
+			SET @goal_ip = (@L * ISNULL( @core_m, 1) * ISNULL( @late_m, 1) ) * ISNULL( @P, 1 )
+			SET @step_ip = @L / @T_s * @S * @direction
+
+			SET @goal_P = 1. * ISNULL( @P, 1 )
+			SET @step_P = 1. / @T_s * @S * @direction
+
 
 			-- We went from having a level to not having a level
-			IF @L > 0 
-				SET @last_positive_L = @L
-			ELSE
-				SET @step_s = @last_positive_L / @T_s
+			IF @L > 0 SET @last_positive_L = @L
+			ELSE      SET @step_ip = @last_positive_L / @T_s
 
 			-- Move the impact in the right direction
-			IF		@i_p < @goal_L	SET @i_p = @i_p + @step_s
-			ELSE IF @i_p > @goal_L	SET @i_p = @i_p - @step_s
+			SET @i_p	= @i_p + @step_ip
+			SET @P_net  = @P_net + @step_P
+
+			insert into @t_disp (Date, v, P_net, direction) VALUES (@d, @step_P, @P_net, @direction)
 
 			-- Check if impact is out of bounds
-			IF @i_p < 0										SET @i_p = 0
+			IF @i_p <= 0								SET @i_p = 0
+			ELSE IF @direction > 0 AND @i_p > @goal_ip	SET @i_p = @goal_ip
 
-			update @temp_t_work set Impact_Potential = @i_p, [internal_step] = @step_s where CURRENT OF CUR
+			IF @P_net <= 0								SET @P_net = 0
+			ELSE IF @direction > 0 AND @P_net > @goal_P SET @P_net = @goal_P
+
+			insert into @t_disp (Date, v, P_net, direction) VALUES (@d, @step_P, @P_net, @direction)
+
+			update @temp_t_work set Impact_Potential = @i_p, [internal_step] = @step_ip, PerformanceNet = @P_net where CURRENT OF CUR
 		FETCH NEXT FROM CUR INTO @d, @L, @P, @T, @core_m, @late_m, @T_s	
 		END
 		CLOSE CUR
@@ -154,11 +190,11 @@ BEGIN
 	delete from user_impact_cache  where UserID = @user_id and CompanyID = @company_id
 
 	INSERT INTO user_impact_cache 
-			   (UserID,   CompanyID,   EventTime, Impact_Potential,   Impact_Actual,   Impact_Actual_LongCycle,   Impact_Actual_LongCycle_RiskAdjusted,   Impact_Money,   Impact_Money_RiskAdjusted,  Impact_Net,                Level, Throttle, Performance, PerformanceLong,     risk_multiplier ) 
-		(SELECT @user_id, @company_id, [Date],   [Impact_Potential], [Impact_Actual], [Impact_Actual_LongCycle], [Impact_Actual_LongCycle_RiskAdjusted], [Impact_Money], [Impact_Money_RiskAdjusted], ISNULL( [Impact_Net], 0 ), Level, Throttle, Performance, LongCycleMultiplier, risk_multiplier FROM @temp_t_work)
+			   (UserID,   CompanyID,   EventTime, Impact_Potential,   Impact_Actual,   Impact_Actual_LongCycle,   Impact_Actual_LongCycle_RiskAdjusted,   Impact_Money,   Impact_Money_RiskAdjusted,  Impact_Net,                Level, Throttle, Performance, PerformanceLong,     risk_multiplier, PerformanceNet ) 
+		(SELECT @user_id, @company_id, [Date],   [Impact_Potential], [Impact_Actual], [Impact_Actual_LongCycle], [Impact_Actual_LongCycle_RiskAdjusted], [Impact_Money], [Impact_Money_RiskAdjusted], ISNULL( [Impact_Net], 0 ), Level, Throttle, Performance, LongCycleMultiplier, risk_multiplier, PerformanceNet FROM @temp_t_work)
 
 	--select * from @temp_t_work
 
-
+	select * from @t_disp where Date < '2/10/2016' and Date > '2/6/2016'
 
 END
