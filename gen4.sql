@@ -1,3 +1,10 @@
+USE [FairSetup20160410]
+GO
+/****** Object:  StoredProcedure [dbo].[F_GenerateUserCache_Data]    Script Date: 4/11/2016 12:41:59 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
 ALTER PROCEDURE [dbo].[F_GenerateUserCache_Data]
 	@user_id int,
 	@company_id int,
@@ -115,10 +122,10 @@ BEGIN
 
 	update @temp_t_work
 		SET 
-			Impact_Actual						 = Impact_Potential * ISNULL( Performance, 1) * ISNULL( Throttle, 0) * ISNULL( Core_Multiplier, 1) * ISNULL( Late_Multiplier,  1),
-			Impact_Actual_LongCycle				 = Impact_Potential * ISNULL( Performance, 1) * ISNULL( Throttle, 0) * ISNULL( Core_Multiplier, 1) * ISNULL( Late_Multiplier,  1) 
-														* ISNULL( LongCycleMultiplier, 1 ),
-			Impact_Money						 = Money_Transfer / dbo.GetDollarsPerImpactPoint()
+			Impact_Actual			= Impact_Potential * ISNULL( Performance, 1) * ISNULL( Throttle, 0) * ISNULL( Core_Multiplier, 1) * ISNULL( Late_Multiplier,  1),
+			Impact_Actual_LongCycle	= Impact_Potential * ISNULL( Performance, 1) * ISNULL( Throttle, 0) * ISNULL( Core_Multiplier, 1) * ISNULL( Late_Multiplier,  1) 
+										* ISNULL( LongCycleMultiplier, 1 ),
+			Impact_Money			= Money_Transfer / dbo.GetDollarsPerImpactPoint()
 
 	-- Adjust for risk
 	update @temp_t_work
